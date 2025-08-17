@@ -62,7 +62,7 @@ async function renderServerQuizFromURL(params) {
   const topicsSpec  = params.get('topics') || '';        // e.g., G1.PGENINST-K:4,Airspace:3
   const cap         = Number(params.get('cap') || 0);
 
-  const url = `${endpoint}?action=questions_buckets&lesson=${encodeURIComponent(lesson)}&topics=${encodeURIComponent(topicsSpec)}&cap=${cap}`;
+  const url = `${endpoint}?action=questions_buckets&lesson=${encodeURIComponent(lesson)}&topics=${encodeURIComponent(topicsSpec)}&cap=${cap}&secret=${encodeURIComponent(secret)}`;
 
   app.innerHTML = `<div class="card">
     <p>Contacting server…</p>
