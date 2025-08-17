@@ -6,8 +6,8 @@ function render(route) {
   const [base, qs] = hash.split('?');
   const params = new URLSearchParams(qs || '');
   switch ((base || 'home').toLowerCase()) {
-    case 'lesson':       return renderLessonFromURL(params);
     case 'server-quiz':  return renderServerQuizFromURL(params);
+    case 'lesson':       return renderLessonFromURL(params);
     default:             return renderHome();
   }
 }
@@ -19,14 +19,13 @@ function renderHome() {
   app.innerHTML = `
     <div class="card">
       <h2>Welcome</h2>
-      <p>Use <strong>Lesson</strong> to embed a Google Slides deck and <strong>Quiz</strong> links/QRs to launch topic-mix quizzes.</p>
+      <p>Use <strong>Lesson</strong> to embed a Google Slides deck and <strong>Quiz</strong> URLs to launch topic-mix quizzes.</p>
       <h3>Examples</h3>
       <ul>
         <li>Lesson: <code>#lesson?title=Regs&src=PASTE_SLIDES_EMBED_SRC</code></li>
         <li>Quiz (single topic): <code>#server-quiz?lesson=KB01&pass=80&topics=G1.PGENINST-K:4</code></li>
         <li>Quiz (multi-topic): <code>#server-quiz?lesson=KB02&pass=80&topics=G1.PGENINST-K:4,Airspace:3,Weather:6</code></li>
       </ul>
-      <p><small>On iPad, links to other decks open a new tab (expected). Animations within a deck still work.</small></p>
     </div>
   `;
 }
@@ -59,39 +58,49 @@ async function renderServerQuizFromURL(params) {
 
   const lesson      = params.get('lesson') || '';
   const passPercent = Number(params.get('pass') || 80);
-  const topicsSpec  = params.get('topics') || '';        // e.g., G1.PGENINST-K:4,Airspace:3
-  const cap         = Number(params.get('cap') || 0);
+  const topicsSpec  = params.get('topics') || ''; // e.g., G1.PGENINST-K:4,Airspace:3
 
-  const url = `${endpoint}?action=questions_buckets&lesson=${encodeURIComponent(lesson)}&topics=${encodeURIComponent(topicsSpec)}&cap=${cap}&secret=${encodeURIComponent(secret)}`;
+  // Build the quiz fetch URL for your current backend (expects action=quiz & secret)
+  const url = new URL(endpoint);
+  url.searchParams.set('action', 'quiz');
+  url.searchParams.set('secret', secret);
+  url.searchParams.set('topics', topicsSpec);
 
   app.innerHTML = `<div class="card">
     <p>Contacting server…</p>
-    <p><small>URL: <code>${escapeHtml(url)}</code></small></p>
+    <p><small>URL: <code>${escapeHtml(url.toString())}</code></small></p>
   </div>`;
 
-  const resp = await fetch(url).catch(() => null);
+  const resp = await fetch(url.toString()).catch(() => null);
   if (!resp) {
-    app.innerHTML = `<div class="card"><h3>Quiz error</h3><p>Network error: could not reach server.</p>
-      <p><small>URL: <code>${escapeHtml(url)}</code></small></p></div>`;
+    app.innerHTML = `<div class="card"><h3>Quiz error</h3><p>Network error: could not reach server.</p></div>`;
     return;
   }
-  let boot;
+  let data;
   try {
-    boot = await resp.json();
+    data = await resp.json();
   } catch {
     const text = await resp.text().catch(()=>'(no body)');
     app.innerHTML = `<div class="card"><h3>Quiz error</h3>
       <p>Server returned non-JSON (often a login/permissions page). First 200 chars:</p>
-      <pre>${escapeHtml(text.slice(0,200))}</pre>
-      <p><small>URL: <code>${escapeHtml(url)}</code></small></p></div>`;
+      <pre>${escapeHtml(text.slice(0,200))}</pre></div>`;
     return;
   }
-  if (!boot.ok) {
-    app.innerHTML = `<div class="card"><h3>Quiz error</h3><p>${escapeHtml(boot.error || 'Server error')}</p></div>`;
+  if (data.error) {
+    app.innerHTML = `<div class="card"><h3>Quiz error</h3><p>${escapeHtml(data.error)}</p></div>`;
     return;
   }
 
-  const { quizId, questions } = boot;
+  const questions = Array.isArray(data.questions) ? data.questions : [];
+  // Normalize fields for rendering
+  const norm = questions.map(q => ({
+    id: q.id,
+    q:  q.q || q.text || '',
+    choices: q.choices || [],
+    correct: q.correct, // letter A/B/C/D (grading done client-side for this backend)
+    explanation: q.explanation || '',
+    figure: q.figure || null
+  }));
 
   app.innerHTML = `
     <div class="card">
@@ -114,8 +123,8 @@ async function renderServerQuizFromURL(params) {
   `;
 
   const qList = document.getElementById('q_list');
-  const selections = new Array(questions.length).fill(null);
-  questions.forEach((q, idx) => {
+  const selections = new Array(norm.length).fill(null);
+  norm.forEach((q, idx) => {
     const node = renderQuizQuestion(q, idx);
     node.querySelectorAll('input[type=radio]').forEach(r => {
       r.onchange = () => selections[idx] = Number(r.value);
@@ -126,19 +135,38 @@ async function renderServerQuizFromURL(params) {
   document.getElementById('q_submit').onclick = async () => {
     const name  = document.getElementById('q_name').value.trim();
     const email = document.getElementById('q_email').value.trim();
-    const answers = selections.map((ci, i) => ({ id: questions[i].id, choiceIndex: ci }));
 
-    const gradeResp = await fetch(`${endpoint}?action=grade`, {
+    let correctCount = 0;
+    const answersObj = {};
+    norm.forEach((q, i) => {
+      const choiceIdx = selections[i];
+      const chosenLetter = idxToLetter(choiceIdx);
+      answersObj[q.id] = chosenLetter || '';
+      if ((chosenLetter || '') === String(q.correct || '').toUpperCase()) {
+        correctCount++;
+      }
+    });
+
+    const scorePct = Math.round((correctCount / norm.length) * 100);
+    const passed = scorePct >= passPercent;
+
+    // Submit log to backend: action=submit (matches your current Apps Script)
+    const submitUrl = new URL(endpoint);
+    submitUrl.searchParams.set('action', 'submit');
+    submitUrl.searchParams.set('secret', secret);
+    const payload = {
+      student: name,
+      lesson:  lesson,
+      score:   correctCount,
+      total:   norm.length,
+      answers: answersObj
+    };
+
+    const res = await fetch(submitUrl.toString(), {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        secret, quizId, name, email,
-        passPercent,
-        topicsSpec,
-        requestedCount: questions.length,
-        answers
-      })
-    }).catch(() => null);
+      body: JSON.stringify(payload)
+    }).catch(()=>null);
 
     const showResult = (html) => {
       const box = document.getElementById('q_result');
@@ -146,54 +174,22 @@ async function renderServerQuizFromURL(params) {
       box.innerHTML = `<h3>Result</h3><p>${html}</p>`;
     };
 
-    if (!gradeResp) {
-      showResult('Network error while grading.');
+    if (!res) {
+      showResult('Network error while submitting results.');
       return;
     }
-    let graded;
-    try {
-      graded = await gradeResp.json();
-    } catch {
-      const text = await gradeResp.text().catch(()=>'(no body)');
-      showResult(`Non-JSON response during grading. First 200 chars: ${escapeHtml(text.slice(0,200))}`);
+    let out;
+    try { out = await res.json(); } catch {
+      const text = await res.text().catch(()=>'(no body)');
+      showResult(`Submit returned non-JSON: ${escapeHtml(text.slice(0,200))}`);
       return;
     }
-    if (!graded.ok) {
-      showResult(escapeHtml(graded.error || 'Server grading error.'));
+    if (out.error) {
+      showResult(`Server error: ${escapeHtml(out.error)}`);
       return;
     }
 
-    const base = `Score: <strong>${graded.score}%</strong> (${graded.total} questions)<br>
-      Status: ${graded.passed ? '✅ PASS' : '❌ RETRY'}<br>
-      Attempt code: <code>${graded.attemptCode}</code>`;
-
-    if ((lesson || '').toUpperCase() === 'FINAL' && graded.passed) {
-      document.getElementById('q_result').innerHTML =
-        `<h3>Result</h3><p>${base}</p>
-         <hr><p>If you believe you meet eligibility, click to request instructor endorsement review.</p>
-         <button class="btn" id="endorseBtn">Request Endorsement Check</button>`;
-      const btn = document.getElementById('endorseBtn');
-      btn.onclick = async () => {
-        const resResp = await fetch(`${endpoint}?action=finalize`, {
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ secret, studentName: name, studentEmail: email })
-        }).catch(()=>null);
-        if (!resResp) { alert('Network error during finalize.'); return; }
-        let res;
-        try { res = await resResp.json(); }
-        catch {
-          const text = await resResp.text().catch(()=>'(no body)');
-          alert('Finalize returned non-JSON: ' + text.slice(0,200));
-          return;
-        }
-        alert(res.ok && res.eligible
-          ? 'Eligibility confirmed. An endorsement draft was emailed to the instructor.'
-          : (res.reason || 'Not eligible yet.'));
-      };
-    } else {
-      showResult(base);
-    }
+    showResult(`Score: <strong>${scorePct}%</strong> (${correctCount} / ${norm.length})<br>Status: ${passed ? '✅ PASS' : '❌ RETRY'}`);
   };
 }
 
@@ -203,10 +199,9 @@ function renderQuizQuestion(q, idx) {
   container.className = 'question';
 
   const qText = document.createElement('div');
-  qText.innerHTML = `<strong>Q${idx + 1}.</strong> ${escapeHtml(q.q || q.text || '')}`;
+  qText.innerHTML = `<strong>Q${idx + 1}.</strong> ${escapeHtml(q.q)}`;
   container.appendChild(qText);
 
-  // Optional figure with fallback srcs (url -> altUrl -> thumb)
   const fig = q.figure || null;
   const sources = [];
   if (fig) {
@@ -245,7 +240,6 @@ function renderQuizQuestion(q, idx) {
     container.appendChild(figWrap);
   }
 
-  // Choices
   const choicesWrap = document.createElement('div');
   choicesWrap.className = 'choices';
   choicesWrap.style.display = 'grid';
@@ -272,3 +266,4 @@ function escapeHtml(s){
     {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]
   ));
 }
+function idxToLetter(i){ return ['A','B','C','D'][Number(i)] || ''; }
