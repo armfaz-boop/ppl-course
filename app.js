@@ -23,8 +23,8 @@ function renderHome() {
       <h3>Examples</h3>
       <ul>
         <li>Lesson: <code>#lesson?title=Regs&src=PASTE_SLIDES_EMBED_SRC</code></li>
-        <li>Quiz (single topic): <code>#server-quiz?lesson=KB01&pass=80&topics=G1.PGENINST-K:4</code></li>
-        <li>Quiz (multi-topic): <code>#server-quiz?lesson=KB02&pass=80&topics=G1.PGENINST-K:4,Airspace:3,Weather:6</code></li>
+        <li>Quiz (single): <code>#server-quiz?lesson=KB01&pass=80&topics=G1.PGENINST-K:4</code></li>
+        <li>Quiz (multi): <code>#server-quiz?lesson=KB02&pass=80&topics=G1.PGENINST-K:4,Airspace:3,Weather:6</code></li>
       </ul>
     </div>
   `;
@@ -60,7 +60,7 @@ async function renderServerQuizFromURL(params) {
   const passPercent = Number(params.get('pass') || 80);
   const topicsSpec  = params.get('topics') || ''; // e.g., G1.PGENINST-K:4,Airspace:3
 
-  // Build the quiz fetch URL for your current backend (expects action=quiz & secret)
+  // Build fetch URL for current backend (action=quiz)
   const url = new URL(endpoint);
   url.searchParams.set('action', 'quiz');
   url.searchParams.set('secret', secret);
@@ -92,12 +92,12 @@ async function renderServerQuizFromURL(params) {
   }
 
   const questions = Array.isArray(data.questions) ? data.questions : [];
-  // Normalize fields for rendering
+  // Normalize for renderer
   const norm = questions.map(q => ({
     id: q.id,
     q:  q.q || q.text || '',
     choices: q.choices || [],
-    correct: q.correct, // letter A/B/C/D (grading done client-side for this backend)
+    correct: (q.correct || '').toString().toUpperCase(), // A/B/C/D
     explanation: q.explanation || '',
     figure: q.figure || null
   }));
@@ -142,7 +142,7 @@ async function renderServerQuizFromURL(params) {
       const choiceIdx = selections[i];
       const chosenLetter = idxToLetter(choiceIdx);
       answersObj[q.id] = chosenLetter || '';
-      if ((chosenLetter || '') === String(q.correct || '').toUpperCase()) {
+      if ((chosenLetter || '') === q.correct) {
         correctCount++;
       }
     });
@@ -150,7 +150,7 @@ async function renderServerQuizFromURL(params) {
     const scorePct = Math.round((correctCount / norm.length) * 100);
     const passed = scorePct >= passPercent;
 
-    // Submit log to backend: action=submit (matches your current Apps Script)
+    // Submit to backend (action=submit)
     const submitUrl = new URL(endpoint);
     submitUrl.searchParams.set('action', 'submit');
     submitUrl.searchParams.set('secret', secret);
@@ -202,6 +202,7 @@ function renderQuizQuestion(q, idx) {
   qText.innerHTML = `<strong>Q${idx + 1}.</strong> ${escapeHtml(q.q)}`;
   container.appendChild(qText);
 
+  // Optional figure with fallback srcs (url -> altUrl -> thumb)
   const fig = q.figure || null;
   const sources = [];
   if (fig) {
