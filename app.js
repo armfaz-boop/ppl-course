@@ -58,7 +58,7 @@ async function renderServerQuizFromURL(params) {
 
   const lesson      = params.get('lesson') || '';
   const passPercent = Number(params.get('pass') || 80);
-  const topicsSpec  = params.get('topics') || ''; // e.g., G1.PGENINST-K:4,Airspace:3
+  const topicsSpec  = params.get('topics') || '';
 
   // Build fetch URL for current backend (action=quiz)
   const url = new URL(endpoint);
@@ -92,7 +92,6 @@ async function renderServerQuizFromURL(params) {
   }
 
   const questions = Array.isArray(data.questions) ? data.questions : [];
-  // Normalize for renderer
   const norm = questions.map(q => ({
     id: q.id,
     q:  q.q || q.text || '',
@@ -150,7 +149,7 @@ async function renderServerQuizFromURL(params) {
     const scorePct = Math.round((correctCount / norm.length) * 100);
     const passed = scorePct >= passPercent;
 
-    // Submit to backend (action=submit)
+    // Submit to backend (action=submit). Omit Content-Type to avoid CORS preflight.
     const submitUrl = new URL(endpoint);
     submitUrl.searchParams.set('action', 'submit');
     submitUrl.searchParams.set('secret', secret);
@@ -162,11 +161,18 @@ async function renderServerQuizFromURL(params) {
       answers: answersObj
     };
 
-    const res = await fetch(submitUrl.toString(), {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(payload)
-    }).catch(()=>null);
+    let res = null;
+    try {
+      res = await fetch(submitUrl.toString(), {
+        method: 'POST',
+        // No headers here to avoid preflight:
+        // headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+      });
+    } catch {
+      // Network layer failure (DNS/offline/CORS preflight)
+      return showResult(`Network error while submitting results.`);
+    }
 
     const showResult = (html) => {
       const box = document.getElementById('q_result');
@@ -178,8 +184,16 @@ async function renderServerQuizFromURL(params) {
       showResult('Network error while submitting results.');
       return;
     }
+    if (!res.ok) {
+      const text = await res.text().catch(()=>'(no body)');
+      showResult(`Submit HTTP ${res.status}: ${escapeHtml(text.slice(0,200))}`);
+      return;
+    }
+
     let out;
-    try { out = await res.json(); } catch {
+    try {
+      out = await res.json();
+    } catch {
       const text = await res.text().catch(()=>'(no body)');
       showResult(`Submit returned non-JSON: ${escapeHtml(text.slice(0,200))}`);
       return;
