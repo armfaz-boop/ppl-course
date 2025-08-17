@@ -131,18 +131,34 @@ async function renderServerQuizFromURL(params) {
     qList.appendChild(node);
   });
 
+// Replace your existing submit handler with this:
 document.getElementById('q_submit').onclick = async () => {
-  const name  = document.getElementById('q_name').value.trim();
-  const email = document.getElementById('q_email').value.trim();
+  const nameEl  = document.getElementById('q_name');
+  const emailEl = document.getElementById('q_email');
+  const name  = (nameEl?.value || '').trim();
+  const email = (emailEl?.value || '').trim();
 
-  // define this BEFORE any early returns/try/catch
+  // Helper to show the result panel
   const showResult = (html) => {
     const box = document.getElementById('q_result');
     box.style.display = 'block';
     box.innerHTML = `<h3>Result</h3><p>${html}</p>`;
   };
 
-  // compute score locally (this backend returns the answer key)
+  // Immediately lock the UI
+  const submitBtn = document.getElementById('q_submit');
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.style.pointerEvents = 'none';
+    submitBtn.style.opacity = '0.6';
+    // Hide after a tick so the user sees the click registered
+    setTimeout(() => { submitBtn.style.display = 'none'; }, 50);
+  }
+  if (nameEl)  nameEl.disabled  = true;
+  if (emailEl) emailEl.disabled = true;
+  document.querySelectorAll('#q_list input[type=radio]').forEach(el => el.disabled = true);
+
+  // Compute score locally
   let correctCount = 0;
   const answersObj = {};
   norm.forEach((q, i) => {
@@ -154,8 +170,8 @@ document.getElementById('q_submit').onclick = async () => {
     }
   });
 
-  const scorePct   = Math.round((correctCount / norm.length) * 100);
-  const passed     = scorePct >= passPercent;
+  const scorePct = Math.round((correctCount / norm.length) * 100);
+  const passed   = scorePct >= passPercent;
 
   // Submit to backend (action=submit). Omit Content-Type to avoid CORS preflight.
   const submitUrl = new URL(endpoint);
@@ -169,7 +185,7 @@ document.getElementById('q_submit').onclick = async () => {
     score:   correctCount,
     total:   norm.length,
     answers: answersObj,
-    passPercent: passPercent  // optional: so backend can compute "Passed"
+    passPercent: passPercent // so backend can compute Passed consistently (optional)
   };
 
   let res = null;
@@ -179,7 +195,7 @@ document.getElementById('q_submit').onclick = async () => {
       // No headers → avoids preflight
       body: JSON.stringify(payload)
     });
-  } catch (e) {
+  } catch {
     showResult(`Network error while submitting results.`);
     return;
   }
@@ -195,9 +211,8 @@ document.getElementById('q_submit').onclick = async () => {
   }
 
   let out;
-  try {
-    out = await res.json();
-  } catch {
+  try { out = await res.json(); }
+  catch {
     const text = await res.text().catch(()=>'(no body)');
     showResult(`Submit returned non-JSON: ${escapeHtml(text.slice(0,200))}`);
     return;
@@ -207,7 +222,8 @@ document.getElementById('q_submit').onclick = async () => {
     return;
   }
 
-  showResult(`Score: <strong>${scorePct}%</strong> (${correctCount} / ${norm.length})<br>Status: ${passed ? '✅ PASS' : '❌ RETRY'}`);
+  // Final result (no retry link, button already hidden)
+  showResult(`Score: <strong>${scorePct}%</strong> (${correctCount} / ${norm.length})<br>Status: ${passed ? '✅ PASS' : '❌ FAIL'}`);
 };
 }
 
