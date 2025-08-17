@@ -150,16 +150,14 @@ async function renderServerQuizFromURL(params) {
     const passed = scorePct >= passPercent;
 
     // Submit to backend (action=submit). Omit Content-Type to avoid CORS preflight.
-    const submitUrl = new URL(endpoint);
-    submitUrl.searchParams.set('action', 'submit');
-    submitUrl.searchParams.set('secret', secret);
     const payload = {
-      student: name,
-      lesson:  lesson,
-      score:   correctCount,
-      total:   norm.length,
-      answers: answersObj
-    };
+  student: name,
+  lesson:  lesson,
+  score:   correctCount,
+  total:   norm.length,
+  answers: answersObj,
+  passPercent: passPercent   // <-- this line uses the pass= from your URL
+};
 
     let res = null;
     try {
