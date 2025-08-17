@@ -47,54 +47,65 @@ function renderLessonFromURL(params) {
   `;
 }
 
-async function renderServerQuizFromURL(params) {
+// ====================== Backend helpers ======================
+async function fetchQuizFromServer(topicsSpec) {
   const endpoint = (window.APP_CONFIG || {}).SCRIPT_ENDPOINT;
   const secret   = (window.APP_CONFIG || {}).SHARED_SECRET;
-
-  if (!endpoint || !secret) {
-    app.innerHTML = `<div class="card"><h3>Quiz error</h3><p><strong>Backend not configured.</strong><br/>Fill SCRIPT_ENDPOINT and SHARED_SECRET in <code>index.html</code>.</p></div>`;
-    return;
-  }
-
-  const lesson      = params.get('lesson') || '';
-  const passPercent = Number(params.get('pass') || 80);
-  const topicsSpec  = params.get('topics') || '';
-
-  // Build fetch URL for current backend (action=quiz)
   const url = new URL(endpoint);
   url.searchParams.set('action', 'quiz');
   url.searchParams.set('secret', secret);
   url.searchParams.set('topics', topicsSpec);
+  const resp = await fetch(url.toString());
+  if (!resp.ok) throw new Error(`Quiz HTTP ${resp.status}`);
+  const data = await resp.json().catch(async ()=>({ error: await resp.text() }));
+  if (data.error) throw new Error(data.error);
+  return data.questions || [];
+}
+
+async function submitQuizResults({ student, email, lesson, score, total, answers, passPercent }) {
+  const endpoint = (window.APP_CONFIG || {}).SCRIPT_ENDPOINT;
+  const secret   = (window.APP_CONFIG || {}).SHARED_SECRET;
+  const url = new URL(endpoint);
+  url.searchParams.set('action', 'submit');  // must match doPost
+  url.searchParams.set('secret', secret);
+
+  // Omit headers to avoid CORS preflight; Apps Script still reads e.postData.contents
+  const resp = await fetch(url.toString(), {
+    method: 'POST',
+    body: JSON.stringify({ student, email, lesson, score, total, answers, passPercent })
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text().catch(()=>'(no body)');
+    throw new Error(`Submit HTTP ${resp.status}: ${text.slice(0,200)}`);
+  }
+  const out = await resp.json().catch(async ()=>({ error: await resp.text() }));
+  if (out.error) throw new Error(out.error);
+  return out; // includes {status:'ok', ...}
+}
+
+// ====================== Quiz view ======================
+async function renderServerQuizFromURL(params) {
+  const lesson      = params.get('lesson') || '';
+  const passPercent = Number(params.get('pass') || 80);
+  const topicsSpec  = params.get('topics') || '';
 
   app.innerHTML = `<div class="card">
     <p>Contacting server…</p>
-    <p><small>URL: <code>${escapeHtml(url.toString())}</code></small></p>
+    <p><small>Topics: <code>${escapeHtml(topicsSpec)}</code></small></p>
   </div>`;
 
-  const resp = await fetch(url.toString()).catch(() => null);
-  if (!resp) {
-    app.innerHTML = `<div class="card"><h3>Quiz error</h3><p>Network error: could not reach server.</p></div>`;
-    return;
-  }
-  let data;
+  let questions;
   try {
-    data = await resp.json();
-  } catch {
-    const text = await resp.text().catch(()=>'(no body)');
-    app.innerHTML = `<div class="card"><h3>Quiz error</h3>
-      <p>Server returned non-JSON (often a login/permissions page). First 200 chars:</p>
-      <pre>${escapeHtml(text.slice(0,200))}</pre></div>`;
-    return;
-  }
-  if (data.error) {
-    app.innerHTML = `<div class="card"><h3>Quiz error</h3><p>${escapeHtml(data.error)}</p></div>`;
+    questions = await fetchQuizFromServer(topicsSpec);
+  } catch (err) {
+    app.innerHTML = `<div class="card"><h3>Quiz error</h3><p>${escapeHtml(err.message || String(err))}</p></div>`;
     return;
   }
 
-  const questions = Array.isArray(data.questions) ? data.questions : [];
   const norm = questions.map(q => ({
     id: q.id,
-    q:  q.q || q.text || '',
+    text: q.q || q.text || '',
     choices: q.choices || [],
     correct: (q.correct || '').toString().toUpperCase(), // A/B/C/D
     explanation: q.explanation || '',
@@ -131,100 +142,59 @@ async function renderServerQuizFromURL(params) {
     qList.appendChild(node);
   });
 
-// Replace your existing submit handler with this:
-document.getElementById('q_submit').onclick = async () => {
-  const nameEl  = document.getElementById('q_name');
-  const emailEl = document.getElementById('q_email');
-  const name  = (nameEl?.value || '').trim();
-  const email = (emailEl?.value || '').trim();
+  // Submit handler (locks UI, no retry, shows PASS/FAIL)
+  document.getElementById('q_submit').onclick = async () => {
+    const nameEl  = document.getElementById('q_name');
+    const emailEl = document.getElementById('q_email');
+    const name  = (nameEl?.value || '').trim();
+    const email = (emailEl?.value || '').trim();
 
-  // Helper to show the result panel
-  const showResult = (html) => {
-    const box = document.getElementById('q_result');
-    box.style.display = 'block';
-    box.innerHTML = `<h3>Result</h3><p>${html}</p>`;
-  };
+    const showResult = (html) => {
+      const box = document.getElementById('q_result');
+      box.style.display = 'block';
+      box.innerHTML = `<h3>Result</h3><p>${html}</p>`;
+    };
 
-  // Immediately lock the UI
-  const submitBtn = document.getElementById('q_submit');
-  if (submitBtn) {
-    submitBtn.disabled = true;
-    submitBtn.style.pointerEvents = 'none';
-    submitBtn.style.opacity = '0.6';
-    // Hide after a tick so the user sees the click registered
-    setTimeout(() => { submitBtn.style.display = 'none'; }, 50);
-  }
-  if (nameEl)  nameEl.disabled  = true;
-  if (emailEl) emailEl.disabled = true;
-  document.querySelectorAll('#q_list input[type=radio]').forEach(el => el.disabled = true);
-
-  // Compute score locally
-  let correctCount = 0;
-  const answersObj = {};
-  norm.forEach((q, i) => {
-    const choiceIdx = selections[i];
-    const chosenLetter = idxToLetter(choiceIdx);
-    answersObj[q.id] = chosenLetter || '';
-    if ((chosenLetter || '') === q.correct) {
-      correctCount++;
+    // lock UI
+    const submitBtn = document.getElementById('q_submit');
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.style.pointerEvents = 'none';
+      submitBtn.style.opacity = '0.6';
+      setTimeout(() => { submitBtn.style.display = 'none'; }, 50);
     }
-  });
+    if (nameEl)  nameEl.disabled  = true;
+    if (emailEl) emailEl.disabled = true;
+    document.querySelectorAll('#q_list input[type=radio]').forEach(el => el.disabled = true);
 
-  const scorePct = Math.round((correctCount / norm.length) * 100);
-  const passed   = scorePct >= passPercent;
-
-  // Submit to backend (action=submit). Omit Content-Type to avoid CORS preflight.
-  const submitUrl = new URL(endpoint);
-  submitUrl.searchParams.set('action', 'submit');
-  submitUrl.searchParams.set('secret', secret);
-
-  const payload = {
-    student: name,
-    email:   email,        // keep if you want it logged
-    lesson:  lesson,
-    score:   correctCount,
-    total:   norm.length,
-    answers: answersObj,
-    passPercent: passPercent // so backend can compute Passed consistently (optional)
-  };
-
-  let res = null;
-  try {
-    res = await fetch(submitUrl.toString(), {
-      method: 'POST',
-      // No headers → avoids preflight
-      body: JSON.stringify(payload)
+    // grade locally
+    let correctCount = 0;
+    const answersObj = {};
+    norm.forEach((q, i) => {
+      const choiceIdx = selections[i];
+      const chosenLetter = idxToLetter(choiceIdx);
+      answersObj[q.id] = chosenLetter || '';
+      if ((chosenLetter || '') === q.correct) correctCount++;
     });
-  } catch {
-    showResult(`Network error while submitting results.`);
-    return;
-  }
 
-  if (!res) {
-    showResult('Network error while submitting results.');
-    return;
-  }
-  if (!res.ok) {
-    const text = await res.text().catch(()=>'(no body)');
-    showResult(`Submit HTTP ${res.status}: ${escapeHtml(text.slice(0,200))}`);
-    return;
-  }
+    const scorePct = Math.round((correctCount / norm.length) * 100);
+    const passed   = scorePct >= passPercent;
 
-  let out;
-  try { out = await res.json(); }
-  catch {
-    const text = await res.text().catch(()=>'(no body)');
-    showResult(`Submit returned non-JSON: ${escapeHtml(text.slice(0,200))}`);
-    return;
-  }
-  if (out.error) {
-    showResult(`Server error: ${escapeHtml(out.error)}`);
-    return;
-  }
-
-  // Final result (no retry link, button already hidden)
-  showResult(`Score: <strong>${scorePct}%</strong> (${correctCount} / ${norm.length})<br>Status: ${passed ? '✅ PASS' : '❌ FAIL'}`);
-};
+    try {
+      await submitQuizResults({
+        student: name,
+        email,
+        lesson,
+        score: correctCount,
+        total: norm.length,
+        answers: answersObj,
+        passPercent
+      });
+      showResult(`Score: <strong>${scorePct}%</strong> (${correctCount} / ${norm.length})<br>Status: ${passed ? '✅ PASS' : '❌ FAIL'}`);
+    } catch (err) {
+      showResult(`Submit error: ${escapeHtml(err.message || String(err))}`);
+    }
+  };
 }
 
 // ====================== Question Renderer (with figure fallbacks) ======================
@@ -233,10 +203,10 @@ function renderQuizQuestion(q, idx) {
   container.className = 'question';
 
   const qText = document.createElement('div');
-  qText.innerHTML = `<strong>Q${idx + 1}.</strong> ${escapeHtml(q.q)}`;
+  qText.innerHTML = `<strong>Q${idx + 1}.</strong> ${escapeHtml(q.text)}`;
   container.appendChild(qText);
 
-  // Optional figure with fallback srcs (url -> altUrl -> thumb)
+  // Optional figure with fallback srcs
   const fig = q.figure || null;
   const sources = [];
   if (fig) {
@@ -275,6 +245,7 @@ function renderQuizQuestion(q, idx) {
     container.appendChild(figWrap);
   }
 
+  // Choices
   const choicesWrap = document.createElement('div');
   choicesWrap.className = 'choices';
   choicesWrap.style.display = 'grid';
