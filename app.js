@@ -1,41 +1,48 @@
-// ===== Simple SPA router =====
+// ====================== Simple SPA Router ======================
 const app = document.getElementById('app');
 
 function render(route) {
-  const base = (route || '').split('?')[0].replace('#','') || 'home';
-  const params = new URLSearchParams((route || '').split('?')[1] || '');
-  if (base === 'lesson') return renderLessonFromURL(params);
-  if (base === 'server-quiz') return renderServerQuizFromURL(params);
-  return renderHome();
+  const hash = (route || '').replace(/^#/, '');
+  const [base, qs] = hash.split('?');
+  const params = new URLSearchParams(qs || '');
+  switch ((base || 'home').toLowerCase()) {
+    case 'lesson':       return renderLessonFromURL(params);
+    case 'server-quiz':  return renderServerQuizFromURL(params);
+    default:             return renderHome();
+  }
 }
 window.addEventListener('hashchange', () => render(location.hash));
 window.addEventListener('load', () => render(location.hash));
 
-// ===== Views =====
+// ====================== Views ======================
 function renderHome() {
   app.innerHTML = `
     <div class="card">
       <h2>Welcome</h2>
-      <p>Use <strong>Lesson</strong> to embed a Google Slides deck. Use <strong>Quiz</strong> links/QRs to launch topic-mix quizzes.</p>
+      <p>Use <strong>Lesson</strong> to embed a Google Slides deck and <strong>Quiz</strong> links/QRs to launch topic-mix quizzes.</p>
       <h3>Examples</h3>
       <ul>
-        <li>Lesson: <code>#lesson?title=Regs&src=EMBED_URL_HERE</code></li>
-        <li>Quiz: <code>#server-quiz?lesson=KB01&pass=80&topics=G1.PGENINST-K:4</code></li>
+        <li>Lesson: <code>#lesson?title=Regs&src=PASTE_SLIDES_EMBED_SRC</code></li>
+        <li>Quiz (single topic): <code>#server-quiz?lesson=KB01&pass=80&topics=G1.PGENINST-K:4</code></li>
+        <li>Quiz (multi-topic): <code>#server-quiz?lesson=KB02&pass=80&topics=G1.PGENINST-K:4,Airspace:3,Weather:6</code></li>
       </ul>
-      <p><small>Tip: iPad works fine. Internal links/animations in a deck work; links to other decks open a new tab.</small></p>
+      <p><small>Note: On iPad, links to other decks open a new tab (expected). Animations within a deck still work.</small></p>
     </div>
   `;
 }
 
 function renderLessonFromURL(params) {
   const title = params.get('title') || 'Lesson';
-  const src = params.get('src') || ''; // Published-to-web Slides iframe src
+  const src   = params.get('src') || '';
   app.innerHTML = `
     <div class="card">
       <h2>${escapeHtml(title)}</h2>
       <div class="card">
-        ${src ? `<iframe style="width:100%;height:520px" frameborder="0" allowfullscreen src="${src}"></iframe>`
-              : `<p><em>No slide src provided. Publish your deck to the web → Embed, then paste the iframe src as the "src" param.</em></p>`}
+        ${
+          src
+          ? `<iframe style="width:100%;height:520px" frameborder="0" allowfullscreen src="${src}"></iframe>`
+          : `<p><em>No slide src provided. Publish your deck to the web → Embed, then paste the iframe <code>src</code> as the "src" param.</em></p>`
+        }
       </div>
     </div>
   `;
@@ -46,21 +53,28 @@ async function renderServerQuizFromURL(params) {
   const secret   = (window.APP_CONFIG || {}).SHARED_SECRET;
 
   if (!endpoint || !secret) {
-    app.innerHTML = `<div class="card"><h3>Quiz error</h3><p><strong>Backend not configured.</strong><br>Fill SCRIPT_ENDPOINT and SHARED_SECRET in index.html.</p></div>`;
+    app.innerHTML = `<div class="card"><h3>Quiz error</h3><p><strong>Backend not configured.</strong><br/>Fill SCRIPT_ENDPOINT and SHARED_SECRET in <code>index.html</code>.</p></div>`;
     return;
   }
 
   const lesson      = params.get('lesson') || '';
   const passPercent = Number(params.get('pass') || 80);
-  const topicsSpec  = params.get('topics') || ''; // e.g., G1.PGENINST-K:4
+  const topicsSpec  = params.get('topics') || '';        // e.g., G1.PGENINST-K:4,Airspace:3
   const cap         = Number(params.get('cap') || 0);
 
   const url = `${endpoint}?action=questions_buckets&lesson=${encodeURIComponent(lesson)}&topics=${encodeURIComponent(topicsSpec)}&cap=${cap}`;
 
-  // --- Improved fetch with diagnostics ---
+  // Show the URL we're contacting for easy debugging
+  app.innerHTML = `<div class="card">
+    <p>Contacting server…</p>
+    <p><small>URL: <code>${escapeHtml(url)}</code></small></p>
+  </div>`;
+
+  // ---- Fetch with diagnostics
   const resp = await fetch(url).catch(() => null);
   if (!resp) {
-    app.innerHTML = `<div class="card"><h3>Quiz error</h3><p>Network error: could not reach server.</p></div>`;
+    app.innerHTML = `<div class="card"><h3>Quiz error</h3><p>Network error: could not reach server.</p>
+      <p><small>URL: <code>${escapeHtml(url)}</code></small></p></div>`;
     return;
   }
   let boot;
@@ -69,15 +83,16 @@ async function renderServerQuizFromURL(params) {
   } catch {
     const text = await resp.text().catch(()=>'(no body)');
     app.innerHTML = `<div class="card"><h3>Quiz error</h3>
-      <p>Server returned non-JSON (often means login/permissions). First 200 chars:</p>
-      <pre>${escapeHtml(text.slice(0,200))}</pre></div>`;
+      <p>Server returned non-JSON (often a login/permissions page). First 200 chars:</p>
+      <pre>${escapeHtml(text.slice(0,200))}</pre>
+      <p><small>URL: <code>${escapeHtml(url)}</code></small></p></div>`;
     return;
   }
   if (!boot.ok) {
     app.innerHTML = `<div class="card"><h3>Quiz error</h3><p>${escapeHtml(boot.error || 'Server error')}</p></div>`;
     return;
   }
-  // --------------------------------------
+  // ----------------------------
 
   const { quizId, questions } = boot;
 
@@ -85,48 +100,43 @@ async function renderServerQuizFromURL(params) {
     <div class="card">
       <h2>Quiz</h2>
       <p><strong>Lesson:</strong> ${escapeHtml(lesson || '(unspecified)')} • <strong>Passing:</strong> ${passPercent}%</p>
+
       <div class="card">
         <label>Name<br><input id="q_name" type="text" placeholder="Your name"/></label><br><br>
         <label>Email<br><input id="q_email" type="email" placeholder="you@example.com"/></label>
       </div>
+
       <div id="q_list"></div>
+
       <div style="margin-top:1rem">
         <button class="btn" id="q_submit">Submit</button>
       </div>
+
       <div id="q_result" class="card" style="display:none"></div>
     </div>
   `;
 
-  // Build questions UI
-  const container = document.getElementById('q_list');
+  // Build questions UI (with figure support)
+  const qList = document.getElementById('q_list');
   const selections = new Array(questions.length).fill(null);
-  questions.forEach((qq, idx) => {
-    const div = document.createElement('div');
-    div.className = 'question';
-    div.innerHTML = `
-      <div><strong>Q${idx+1}.</strong> ${escapeHtml(qq.q)}</div>
-      <div class="choices">
-        ${qq.choices.map((c,i)=>`
-          <label><input type="radio" name="q${idx}" value="${i}"> ${escapeHtml(c)}</label>
-        `).join('')}
-      </div>
-    `;
-    div.querySelectorAll('input[type=radio]').forEach(r=>{
-      r.onchange = ()=> selections[idx] = Number(r.value);
+  questions.forEach((q, idx) => {
+    const node = renderQuizQuestion(q, idx);
+    // Wire up choice handlers
+    node.querySelectorAll('input[type=radio]').forEach(r => {
+      r.onchange = () => selections[idx] = Number(r.value);
     });
-    container.appendChild(div);
+    qList.appendChild(node);
   });
 
   // Submit → grade on server → show result
   document.getElementById('q_submit').onclick = async () => {
     const name  = document.getElementById('q_name').value.trim();
     const email = document.getElementById('q_email').value.trim();
-
     const answers = selections.map((ci, i) => ({ id: questions[i].id, choiceIndex: ci }));
 
-    const gradedResp = await fetch(`${endpoint}?action=grade`, {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
+    const gradeResp = await fetch(`${endpoint}?action=grade`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
         secret, quizId, name, email,
         passPercent,
@@ -136,15 +146,21 @@ async function renderServerQuizFromURL(params) {
       })
     }).catch(() => null);
 
-    if (!gradedResp) {
-      showResult(`Network error while grading.`);
+    const showResult = (html) => {
+      const box = document.getElementById('q_result');
+      box.style.display = 'block';
+      box.innerHTML = `<h3>Result</h3><p>${html}</p>`;
+    };
+
+    if (!gradeResp) {
+      showResult('Network error while grading.');
       return;
     }
     let graded;
     try {
-      graded = await gradedResp.json();
+      graded = await gradeResp.json();
     } catch {
-      const text = await gradedResp.text().catch(()=>'(no body)');
+      const text = await gradeResp.text().catch(()=>'(no body)');
       showResult(`Non-JSON response during grading. First 200 chars: ${escapeHtml(text.slice(0,200))}`);
       return;
     }
@@ -153,18 +169,19 @@ async function renderServerQuizFromURL(params) {
       return;
     }
 
-    showResult(`Score: <strong>${graded.score}%</strong> (${graded.total} questions)<br>
+    // Base result
+    const base = `Score: <strong>${graded.score}%</strong> (${graded.total} questions)<br>
       Status: ${graded.passed ? '✅ PASS' : '❌ RETRY'}<br>
-      Attempt code: <code>${graded.attemptCode}</code>
-      ${lesson === 'FINAL' && graded.passed
-        ? `<hr><p>If you believe you meet eligibility, click to request instructor endorsement review.</p>
-           <button class="btn" id="endorseBtn">Request Endorsement Check</button>`
-        : ''}`);
+      Attempt code: <code>${graded.attemptCode}</code>`;
 
-    // Optional endorsement flow for FINAL
-    const endorseBtn = document.getElementById('endorseBtn');
-    if (endorseBtn) {
-      endorseBtn.onclick = async () => {
+    // Offer endorsement request only after a FINAL pass
+    if ((lesson || '').toUpperCase() === 'FINAL' && graded.passed) {
+      document.getElementById('q_result').innerHTML =
+        `<h3>Result</h3><p>${base}</p>
+         <hr><p>If you believe you meet eligibility, click to request instructor endorsement review.</p>
+         <button class="btn" id="endorseBtn">Request Endorsement Check</button>`;
+      const btn = document.getElementById('endorseBtn');
+      btn.onclick = async () => {
         const resResp = await fetch(`${endpoint}?action=finalize`, {
           method:'POST',
           headers:{'Content-Type':'application/json'},
@@ -182,17 +199,71 @@ async function renderServerQuizFromURL(params) {
           ? 'Eligibility confirmed. An endorsement draft was emailed to the instructor.'
           : (res.reason || 'Not eligible yet.'));
       };
+    } else {
+      showResult(base);
     }
   };
-
-  function showResult(html) {
-    const box = document.getElementById('q_result');
-    box.style.display = 'block';
-    box.innerHTML = `<h3>Result</h3><p>${html}</p>`;
-  }
 }
 
-// ===== Utils =====
+// ====================== Question Renderer (with figures) ======================
+function renderQuizQuestion(q, idx) {
+  const container = document.createElement('div');
+  container.className = 'question';
+
+  const qText = document.createElement('div');
+  qText.innerHTML = `<strong>Q${idx + 1}.</strong> ${escapeHtml(q.q)}`;
+  container.appendChild(qText);
+
+  // Optional figure
+  if (q.figure && q.figure.url) {
+    const figWrap = document.createElement('div');
+    figWrap.className = 'quiz-figure';
+    figWrap.style.margin = '.5rem 0 1rem';
+
+    const img = document.createElement('img');
+    img.src = q.figure.url;
+    img.alt = `Figure ${q.figure.number || ''}`;
+    img.style.maxWidth = '100%';
+    img.style.border = '1px solid #eee';
+    img.style.borderRadius = '6px';
+    img.style.height = 'auto';
+    if (q.figure.width) img.style.width = `${q.figure.width}px`;
+
+    const cap = document.createElement('div');
+    cap.className = 'figure-caption';
+    cap.style.fontSize = '.85rem';
+    cap.style.color = '#555';
+    cap.textContent = `Figure ${q.figure.number || ''}`;
+
+    figWrap.appendChild(img);
+    figWrap.appendChild(cap);
+    container.appendChild(figWrap);
+  }
+
+  // Choices
+  const choicesWrap = document.createElement('div');
+  choicesWrap.className = 'choices';
+  choicesWrap.style.display = 'grid';
+  choicesWrap.style.gap = '.5rem';
+
+  (q.choices || []).forEach((choice, i) => {
+    const label = document.createElement('label');
+    label.className = 'quiz-choice';
+    label.style.cursor = 'pointer';
+    label.innerHTML = `
+      <input type="radio" name="q${idx}" value="${i}" />
+      ${escapeHtml(choice)}
+    `;
+    choicesWrap.appendChild(label);
+  });
+
+  container.appendChild(choicesWrap);
+  return container;
+}
+
+// ====================== Utils ======================
 function escapeHtml(s){
-  return String(s||'').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
+  return String(s||'').replace(/[&<>"']/g, m => (
+    {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]
+  ));
 }
