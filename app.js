@@ -131,78 +131,84 @@ async function renderServerQuizFromURL(params) {
     qList.appendChild(node);
   });
 
-  document.getElementById('q_submit').onclick = async () => {
-    const name  = document.getElementById('q_name').value.trim();
-    const email = document.getElementById('q_email').value.trim();
+document.getElementById('q_submit').onclick = async () => {
+  const name  = document.getElementById('q_name').value.trim();
+  const email = document.getElementById('q_email').value.trim();
 
-    let correctCount = 0;
-    const answersObj = {};
-    norm.forEach((q, i) => {
-      const choiceIdx = selections[i];
-      const chosenLetter = idxToLetter(choiceIdx);
-      answersObj[q.id] = chosenLetter || '';
-      if ((chosenLetter || '') === q.correct) {
-        correctCount++;
-      }
-    });
-
-    const scorePct = Math.round((correctCount / norm.length) * 100);
-    const passed = scorePct >= passPercent;
-
-    // Submit to backend (action=submit). Omit Content-Type to avoid CORS preflight.
-    const payload = {
-  student: name,
-  lesson:  lesson,
-  score:   correctCount,
-  total:   norm.length,
-  answers: answersObj,
-  passPercent: passPercent   // <-- this line uses the pass= from your URL
-};
-
-    let res = null;
-    try {
-      res = await fetch(submitUrl.toString(), {
-        method: 'POST',
-        // No headers here to avoid preflight:
-        // headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(payload)
-      });
-    } catch {
-      // Network layer failure (DNS/offline/CORS preflight)
-      return showResult(`Network error while submitting results.`);
-    }
-
-    const showResult = (html) => {
-      const box = document.getElementById('q_result');
-      box.style.display = 'block';
-      box.innerHTML = `<h3>Result</h3><p>${html}</p>`;
-    };
-
-    if (!res) {
-      showResult('Network error while submitting results.');
-      return;
-    }
-    if (!res.ok) {
-      const text = await res.text().catch(()=>'(no body)');
-      showResult(`Submit HTTP ${res.status}: ${escapeHtml(text.slice(0,200))}`);
-      return;
-    }
-
-    let out;
-    try {
-      out = await res.json();
-    } catch {
-      const text = await res.text().catch(()=>'(no body)');
-      showResult(`Submit returned non-JSON: ${escapeHtml(text.slice(0,200))}`);
-      return;
-    }
-    if (out.error) {
-      showResult(`Server error: ${escapeHtml(out.error)}`);
-      return;
-    }
-
-    showResult(`Score: <strong>${scorePct}%</strong> (${correctCount} / ${norm.length})<br>Status: ${passed ? '✅ PASS' : '❌ RETRY'}`);
+  // define this BEFORE any early returns/try/catch
+  const showResult = (html) => {
+    const box = document.getElementById('q_result');
+    box.style.display = 'block';
+    box.innerHTML = `<h3>Result</h3><p>${html}</p>`;
   };
+
+  // compute score locally (this backend returns the answer key)
+  let correctCount = 0;
+  const answersObj = {};
+  norm.forEach((q, i) => {
+    const choiceIdx = selections[i];
+    const chosenLetter = idxToLetter(choiceIdx);
+    answersObj[q.id] = chosenLetter || '';
+    if ((chosenLetter || '') === q.correct) {
+      correctCount++;
+    }
+  });
+
+  const scorePct   = Math.round((correctCount / norm.length) * 100);
+  const passed     = scorePct >= passPercent;
+
+  // Submit to backend (action=submit). Omit Content-Type to avoid CORS preflight.
+  const submitUrl = new URL(endpoint);
+  submitUrl.searchParams.set('action', 'submit');
+  submitUrl.searchParams.set('secret', secret);
+
+  const payload = {
+    student: name,
+    email:   email,        // keep if you want it logged
+    lesson:  lesson,
+    score:   correctCount,
+    total:   norm.length,
+    answers: answersObj,
+    passPercent: passPercent  // optional: so backend can compute "Passed"
+  };
+
+  let res = null;
+  try {
+    res = await fetch(submitUrl.toString(), {
+      method: 'POST',
+      // No headers → avoids preflight
+      body: JSON.stringify(payload)
+    });
+  } catch (e) {
+    showResult(`Network error while submitting results.`);
+    return;
+  }
+
+  if (!res) {
+    showResult('Network error while submitting results.');
+    return;
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(()=>'(no body)');
+    showResult(`Submit HTTP ${res.status}: ${escapeHtml(text.slice(0,200))}`);
+    return;
+  }
+
+  let out;
+  try {
+    out = await res.json();
+  } catch {
+    const text = await res.text().catch(()=>'(no body)');
+    showResult(`Submit returned non-JSON: ${escapeHtml(text.slice(0,200))}`);
+    return;
+  }
+  if (out.error) {
+    showResult(`Server error: ${escapeHtml(out.error)}`);
+    return;
+  }
+
+  showResult(`Score: <strong>${scorePct}%</strong> (${correctCount} / ${norm.length})<br>Status: ${passed ? '✅ PASS' : '❌ RETRY'}`);
+};
 }
 
 // ====================== Question Renderer (with figure fallbacks) ======================
