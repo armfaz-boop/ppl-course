@@ -1,9 +1,9 @@
+// ===== Simple SPA router =====
 const app = document.getElementById('app');
 
-/* ------------ Router ------------- */
 function render(route) {
-  const base = route.split('?')[0].replace('#','') || 'home';
-  const params = new URLSearchParams(route.split('?')[1] || '');
+  const base = (route || '').split('?')[0].replace('#','') || 'home';
+  const params = new URLSearchParams((route || '').split('?')[1] || '');
   if (base === 'lesson') return renderLessonFromURL(params);
   if (base === 'server-quiz') return renderServerQuizFromURL(params);
   return renderHome();
@@ -11,7 +11,7 @@ function render(route) {
 window.addEventListener('hashchange', () => render(location.hash));
 window.addEventListener('load', () => render(location.hash));
 
-/* ------------ Views ------------- */
+// ===== Views =====
 function renderHome() {
   app.innerHTML = `
     <div class="card">
@@ -19,24 +19,23 @@ function renderHome() {
       <p>Use <strong>Lesson</strong> to embed a Google Slides deck. Use <strong>Quiz</strong> links/QRs to launch topic-mix quizzes.</p>
       <h3>Examples</h3>
       <ul>
-        <li>Lesson embed: <code>#lesson?title=Regs&src=EMBED_URL_HERE</code></li>
-        <li>Quiz launch: <code>#server-quiz?lesson=KB01&pass=80&topics=G1.PGENINST-K:4</code></li>
+        <li>Lesson: <code>#lesson?title=Regs&src=EMBED_URL_HERE</code></li>
+        <li>Quiz: <code>#server-quiz?lesson=KB01&pass=80&topics=G1.PGENINST-K:4</code></li>
       </ul>
-      <p>Tip on iPad: internal links/animations inside a deck work in the embed. Links to another deck open a new tab (that’s expected).</p>
+      <p><small>Tip: iPad works fine. Internal links/animations in a deck work; links to other decks open a new tab.</small></p>
     </div>
   `;
 }
 
 function renderLessonFromURL(params) {
   const title = params.get('title') || 'Lesson';
-  const src = params.get('src') || ''; // paste your published-to-web Slides embed URL
+  const src = params.get('src') || ''; // Published-to-web Slides iframe src
   app.innerHTML = `
     <div class="card">
       <h2>${escapeHtml(title)}</h2>
-      <p>Embedded Slides (publish your deck to the web → Embed, then paste the iframe src here as the "src" param).</p>
       <div class="card">
-        ${src ? `<iframe style="width:100%;height:520px" frameborder="0" allowfullscreen src="${src}"></iframe>` :
-                 `<p><em>No slide src provided.</em></p>`}
+        ${src ? `<iframe style="width:100%;height:520px" frameborder="0" allowfullscreen src="${src}"></iframe>`
+              : `<p><em>No slide src provided. Publish your deck to the web → Embed, then paste the iframe src as the "src" param.</em></p>`}
       </div>
     </div>
   `;
@@ -44,27 +43,44 @@ function renderLessonFromURL(params) {
 
 async function renderServerQuizFromURL(params) {
   const endpoint = (window.APP_CONFIG || {}).SCRIPT_ENDPOINT;
-  const secret = (window.APP_CONFIG || {}).SHARED_SECRET;
+  const secret   = (window.APP_CONFIG || {}).SHARED_SECRET;
+
   if (!endpoint || !secret) {
-    app.innerHTML = `<div class="card"><p><strong>Backend not configured.</strong><br>Fill SCRIPT_ENDPOINT and SHARED_SECRET in index.html.</p></div>`;
+    app.innerHTML = `<div class="card"><h3>Quiz error</h3><p><strong>Backend not configured.</strong><br>Fill SCRIPT_ENDPOINT and SHARED_SECRET in index.html.</p></div>`;
     return;
   }
 
-  const lesson = params.get('lesson') || '';
+  const lesson      = params.get('lesson') || '';
   const passPercent = Number(params.get('pass') || 80);
-  const topicsSpec = params.get('topics') || ''; // e.g., G1.PGENINST-K:4
-  const cap = Number(params.get('cap') || 0);
+  const topicsSpec  = params.get('topics') || ''; // e.g., G1.PGENINST-K:4
+  const cap         = Number(params.get('cap') || 0);
 
-  // fetch random questions from server
   const url = `${endpoint}?action=questions_buckets&lesson=${encodeURIComponent(lesson)}&topics=${encodeURIComponent(topicsSpec)}&cap=${cap}`;
-  const boot = await fetch(url).then(r=>r.json()).catch(()=>({ok:false,error:'Network error'}));
-  if (!boot.ok) {
-    app.innerHTML = `<div class="card"><h3>Quiz error</h3><p>${escapeHtml(boot.error || 'Could not load questions.')}</p></div>`;
+
+  // --- Improved fetch with diagnostics ---
+  const resp = await fetch(url).catch(() => null);
+  if (!resp) {
+    app.innerHTML = `<div class="card"><h3>Quiz error</h3><p>Network error: could not reach server.</p></div>`;
     return;
   }
+  let boot;
+  try {
+    boot = await resp.json();
+  } catch {
+    const text = await resp.text().catch(()=>'(no body)');
+    app.innerHTML = `<div class="card"><h3>Quiz error</h3>
+      <p>Server returned non-JSON (often means login/permissions). First 200 chars:</p>
+      <pre>${escapeHtml(text.slice(0,200))}</pre></div>`;
+    return;
+  }
+  if (!boot.ok) {
+    app.innerHTML = `<div class="card"><h3>Quiz error</h3><p>${escapeHtml(boot.error || 'Server error')}</p></div>`;
+    return;
+  }
+  // --------------------------------------
+
   const { quizId, questions } = boot;
 
-  // render form
   app.innerHTML = `
     <div class="card">
       <h2>Quiz</h2>
@@ -81,7 +97,7 @@ async function renderServerQuizFromURL(params) {
     </div>
   `;
 
-  // build question UI
+  // Build questions UI
   const container = document.getElementById('q_list');
   const selections = new Array(questions.length).fill(null);
   questions.forEach((qq, idx) => {
@@ -101,13 +117,14 @@ async function renderServerQuizFromURL(params) {
     container.appendChild(div);
   });
 
-  // submit → grade on server → show result
+  // Submit → grade on server → show result
   document.getElementById('q_submit').onclick = async () => {
-    const name = document.getElementById('q_name').value.trim();
+    const name  = document.getElementById('q_name').value.trim();
     const email = document.getElementById('q_email').value.trim();
+
     const answers = selections.map((ci, i) => ({ id: questions[i].id, choiceIndex: ci }));
 
-    const graded = await fetch(`${endpoint}?action=grade`, {
+    const gradedResp = await fetch(`${endpoint}?action=grade`, {
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
@@ -117,40 +134,65 @@ async function renderServerQuizFromURL(params) {
         requestedCount: questions.length,
         answers
       })
-    }).then(r=>r.json()).catch(()=>({ok:false,error:'Network error'}));
+    }).catch(() => null);
 
-    const box = document.getElementById('q_result');
-    box.style.display = 'block';
-    if (!graded.ok) {
-      box.innerHTML = `<h3>Could not grade</h3><p>${escapeHtml(graded.error || '')}</p>`;
+    if (!gradedResp) {
+      showResult(`Network error while grading.`);
       return;
     }
-    box.innerHTML = `
-      <h3>Result</h3>
-      <p>Score: <strong>${graded.score}%</strong> (${graded.total} questions)</p>
-      <p>Status: ${graded.passed ? '✅ PASS' : '❌ RETRY'}</p>
-      <p>Attempt code: <code>${graded.attemptCode}</code></p>
-      ${lesson === 'FINAL' && graded.passed ? `
-        <hr><p>If you believe you meet eligibility, click to request instructor endorsement review.</p>
-        <button class="btn" id="endorseBtn">Request Endorsement Check</button>
-      ` : ``}
-    `;
+    let graded;
+    try {
+      graded = await gradedResp.json();
+    } catch {
+      const text = await gradedResp.text().catch(()=>'(no body)');
+      showResult(`Non-JSON response during grading. First 200 chars: ${escapeHtml(text.slice(0,200))}`);
+      return;
+    }
+    if (!graded.ok) {
+      showResult(escapeHtml(graded.error || 'Server grading error.'));
+      return;
+    }
+
+    showResult(`Score: <strong>${graded.score}%</strong> (${graded.total} questions)<br>
+      Status: ${graded.passed ? '✅ PASS' : '❌ RETRY'}<br>
+      Attempt code: <code>${graded.attemptCode}</code>
+      ${lesson === 'FINAL' && graded.passed
+        ? `<hr><p>If you believe you meet eligibility, click to request instructor endorsement review.</p>
+           <button class="btn" id="endorseBtn">Request Endorsement Check</button>`
+        : ''}`);
+
+    // Optional endorsement flow for FINAL
     const endorseBtn = document.getElementById('endorseBtn');
     if (endorseBtn) {
       endorseBtn.onclick = async () => {
-        const res = await fetch(`${endpoint}?action=finalize`, {
+        const resResp = await fetch(`${endpoint}?action=finalize`, {
           method:'POST',
           headers:{'Content-Type':'application/json'},
           body: JSON.stringify({ secret, studentName: name, studentEmail: email })
-        }).then(r=>r.json()).catch(()=>({ok:false,error:'Network error'}));
+        }).catch(()=>null);
+        if (!resResp) { alert('Network error during finalize.'); return; }
+        let res;
+        try { res = await resResp.json(); }
+        catch {
+          const text = await resResp.text().catch(()=>'(no body)');
+          alert('Finalize returned non-JSON: ' + text.slice(0,200));
+          return;
+        }
         alert(res.ok && res.eligible
           ? 'Eligibility confirmed. An endorsement draft was emailed to the instructor.'
-          : (res.reason || 'Not eligible yet.')
-        );
+          : (res.reason || 'Not eligible yet.'));
       };
     }
   };
+
+  function showResult(html) {
+    const box = document.getElementById('q_result');
+    box.style.display = 'block';
+    box.innerHTML = `<h3>Result</h3><p>${html}</p>`;
+  }
 }
 
-/* ------------ Utils ------------- */
-function escapeHtml(s){ return String(s||'').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m])); }
+// ===== Utils =====
+function escapeHtml(s){
+  return String(s||'').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
+}
