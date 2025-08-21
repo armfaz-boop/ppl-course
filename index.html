@@ -1,34 +1,51 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Private Pilot Ground — Course</title>
-  <link rel="stylesheet" href="styles.css"/>
-</head>
-<body>
-  <header>
-    <h1>Private Pilot Ground — Course</h1>
-    <nav>
-      <a href="#home">Home</a>
-      <a href="#lesson">Lesson</a>
-      <a href="#server-quiz">Quiz</a>
-    </nav>
-  </header>
-
-  <main id="app"></main>
-
-  <footer>
-    <small>© Your Name — Training use only. Not official FAA material.</small>
-  </footer>
-
+  <meta charset="UTF-8">
+  <title>Flight School Portal</title>
   <script>
-    /* Fill these in Phase 3 */
     window.APP_CONFIG = {
-      SCRIPT_ENDPOINT: "https://script.google.com/macros/s/AKfycbwxrNp8P2yJPEaWadycrSwre5bEAz5oOpn9iId_z6L6krEp1ZdcSKa2j0zn0uBG9bfKwg/exec",   // e.g. https://script.google.com/macros/s/AKfycb.../exec
-      SHARED_SECRET: "ppl_9x7d3-MySecret-2025"      // your random string, must match the Apps Script
+      SCRIPT_ENDPOINT: "https://script.google.com/macros/s/AKfycbwxrNp8P2yJPEaWadycrSwre5bEAz5oOpn9iId_z6L6krEp1ZdcSKa2j0zn0uBG9bfKwg/exec", 
+      SHARED_SECRET: "ppl_9x7d3-MySecret-2025"
     };
   </script>
-  <script src="app.js?v=fix-endpoint-1"></script>
+  <script src="app.js" defer></script>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2em; }
+    nav button { margin-right: 1em; }
+    .hidden { display: none; }
+    .assignment { border: 1px solid #ccc; padding: 10px; margin: 10px 0; }
+  </style>
+</head>
+<body>
+  <h1>Flight School Portal</h1>
+  <nav>
+    <button onclick="showPage('loginPage')">Login</button>
+    <button onclick="showPage('assignmentsPage')">Assignments</button>
+    <button onclick="logout()">Logout</button>
+  </nav>
+
+  <!-- Login -->
+  <section id="loginPage">
+    <h2>Login</h2>
+    <input id="loginUsername" placeholder="Email or Username"><br>
+    <input id="loginPassword" type="password" placeholder="Password"><br>
+    <button onclick="login()">Login</button>
+    <p id="loginStatus"></p>
+  </section>
+
+  <!-- Assignments -->
+  <section id="assignmentsPage" class="hidden">
+    <h2>Your Assignments</h2>
+    <div id="assignmentsList"></div>
+  </section>
+
+  <!-- Quiz -->
+  <section id="quizPage" class="hidden">
+    <h2 id="quizTitle"></h2>
+    <form id="quizForm"></form>
+    <button onclick="submitQuiz()">Submit Quiz</button>
+    <p id="quizStatus"></p>
+  </section>
 </body>
 </html>
